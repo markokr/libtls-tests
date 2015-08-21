@@ -1,4 +1,5 @@
 
+#include <sys/types.h>
 #include <tls.h>
 #include <err.h>
 #include <stdio.h>
@@ -8,7 +9,7 @@ int main(int argc, char *argv[])
 {
 	struct tls_config *conf;
 	struct tls *ctx;
-	struct tls_cert_info *cert;
+	struct tls_cert *cert;
 	int res;
 	const char *host;
 

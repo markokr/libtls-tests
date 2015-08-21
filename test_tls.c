@@ -1,23 +1,28 @@
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <tls.h>
-#include <event.h>
+#include <sys/un.h>
+
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
 
 #include <signal.h>
 #include <err.h>
 #include <ctype.h>
 #include <string.h>
 #include <stdarg.h>
-#include <stdint.h>
-#include <stdbool.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#include <tls.h>
+#include <event.h>
 
 #include "test_common.h"
 
-#ifdef USUAL_LIBSSL_FOR_TLS
-#include <usual/tls/tls_internal.h>
-#endif
+#include <tls_internal.h>
 
 enum WState {
 	HANDSHAKE,
@@ -61,59 +66,54 @@ static void free_worker(struct Worker *w)
 
 static void *load_file(const char *fn, size_t *len_p)
 {
-	long len;
-	char *buf = NULL;
+	return tls_load_file(fn, len_p, NULL);
+}
+
+/* toggle non-blocking flag */
+static bool socket_set_nonblocking(int fd, bool non_block)
+{
+	int flags;
+
+	/* get old flags */
+	flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0)
+		return false;
+
+	/* flip O_NONBLOCK */
+	if (non_block)
+		flags |= O_NONBLOCK;
+	else
+		flags &= ~O_NONBLOCK;
+
+	/* set new flags */
+	if (fcntl(fd, F_SETFL, flags) < 0)
+		return false;
+	return true;
+}
+
+/* initial socket setup */
+static bool socket_setup(int sock, bool non_block)
+{
 	int res;
-	FILE *f;
 
-	f = fopen(fn, "r");
-	if (!f) {
-		return NULL;
-	}
+#ifdef SO_NOSIGPIPE
+	/* disallow SIGPIPE, if possible */
+	int val = 1;
+	res = setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &val, sizeof(val));
+	if (res < 0)
+		return false;
+#endif
 
-	if (fseek(f, 0, SEEK_END) != 0) {
-		fclose(f);
-		return NULL;
-	}
-	len = ftell(f);
-	buf = malloc(len + 1);
-	if (!buf) {
-		fclose(f);
-		return NULL;
-	}
+	/* close fd on exec */
+	res = fcntl(sock, F_SETFD, FD_CLOEXEC);
+	if (res < 0)
+		return false;
 
-	if ((res = fread(buf, 1, len, f)) < 0) {
-		free(buf);
-		fclose(f);
-		return NULL;
-	}
+	/* when no data available, return EAGAIN instead blocking */
+	if (!socket_set_nonblocking(sock, non_block))
+		return false;
 
-	fclose(f);
-
-	buf[res] = 0;
-	if (len_p)
-		*len_p = res;
-	return buf;
-}
-
-size_t strlcpy(char *dst, const char *src, size_t n)
-{
-	size_t len = strlen(src);
-	if (len < n) {
-		memcpy(dst, src, len + 1);
-	} else if (n > 0) {
-		memcpy(dst, src, n - 1);
-		dst[n - 1] = 0;
-	}
-	return len;
-}
-
-size_t strlcat(char *dst, const char *src, size_t n)
-{
-	size_t pos = 0;
-	while (pos < n && dst[pos])
-		pos++;
-	return pos + strlcpy(dst + pos, src, n - pos);
+	return true;
 }
 
 static const char *add_error(struct Worker *w, const char *s)
@@ -378,18 +378,20 @@ static const char *hexcmp(const char *fn, const void *buf, unsigned int len)
 
 static const char *check_fp(struct Worker *w, const char *algo, const char *fn, size_t xlen)
 {
-	char buf[128];
 	const char *emsg;
 	int res;
-	size_t outlen = 0;
+	struct tls_cert *cert;
 
 	if (!fn)
 		return NULL;
 
-	res = tls_get_peer_cert_fingerprint(w->ctx, algo, buf, sizeof buf, &outlen);
-	if (res != 0 || outlen != xlen)
+	res = tls_get_peer_cert(w->ctx, &cert, algo);
+	if (res != 0 || cert->fingerprint_size != xlen) {
+		tls_cert_free(cert);
 		return "FP-sha1-fail";
-	emsg = hexcmp(fn, buf, outlen);
+	}
+	emsg = hexcmp(fn, cert->fingerprint, cert->fingerprint_size);
+	tls_cert_free(cert);
 	if (emsg)
 		return emsg;
 	return NULL;
@@ -403,27 +405,27 @@ static void show_append(char *buf, size_t buflen, const char *s1, const char *s2
 	strlcat(buf, s2, buflen);
 }
 
-static void show_entity(char *buf, size_t buflen, const struct tls_cert_entity *ent)
+static void show_dname(char *buf, size_t buflen, const struct tls_cert_dname *dname)
 {
-	show_append(buf, buflen, "/CN=", ent->common_name);
-	show_append(buf, buflen, "/C=", ent->country_name);
-	show_append(buf, buflen, "/ST=", ent->state_or_province_name);
-	show_append(buf, buflen, "/L=", ent->locality_name);
-	show_append(buf, buflen, "/A=", ent->street_address);
-	show_append(buf, buflen, "/O=", ent->organization_name);
-	show_append(buf, buflen, "/OU=", ent->organizational_unit_name);
+	show_append(buf, buflen, "/CN=", dname->common_name);
+	show_append(buf, buflen, "/C=", dname->country_name);
+	show_append(buf, buflen, "/ST=", dname->state_or_province_name);
+	show_append(buf, buflen, "/L=", dname->locality_name);
+	show_append(buf, buflen, "/A=", dname->street_address);
+	show_append(buf, buflen, "/O=", dname->organization_name);
+	show_append(buf, buflen, "/OU=", dname->organizational_unit_name);
 }
 
-static void show_cert(struct tls_cert_info *cert, char *buf, size_t buflen)
+static void show_cert(struct tls_cert *cert, char *buf, size_t buflen)
 {
 	if (!cert) {
 		snprintf(buf, buflen, "no cert");
 		return;
 	}
 	show_append(buf, buflen, "Subject: ", "");
-	show_entity(buf, buflen, &cert->subject);
+	show_dname(buf, buflen, &cert->subject);
 	show_append(buf, buflen, " Issuer: ", "");
-	show_entity(buf, buflen, &cert->issuer);
+	show_dname(buf, buflen, &cert->issuer);
 	show_append(buf, buflen, " Serial: ", cert->serial);
 	show_append(buf, buflen, " NotBefore: ", cert->not_before);
 	show_append(buf, buflen, " NotAfter: ", cert->not_after);
@@ -446,7 +448,7 @@ static const char *done_handshake(struct Worker *w)
 		if (strcmp(w->show, "ciphers") == 0) {
 			tls_get_connection_info(w->ctx, w->showbuf, sizeof w->showbuf);
 		} else if (strcmp(w->show, "peer-cert") == 0) {
-			struct tls_cert_info *cert = NULL;
+			struct tls_cert *cert = NULL;
 			tls_get_peer_cert(w->ctx, &cert, NULL);
 			show_cert(cert, w->showbuf, sizeof w->showbuf);
 			tls_cert_free(cert);
@@ -565,6 +567,7 @@ end:
 #define CA1 "ca=ssl/ca1_root.crt"
 #define CA2 "ca=ssl/ca2_root.crt"
 #define COMPLEX1 "key=ssl/ca1_complex1.key", "cert=ssl/ca1_complex1.crt"
+#define COMPLEX2 "key=ssl/ca2_complex2.key", "cert=ssl/ca2_complex2.crt"
 
 static void test_verify(void *z)
 {
@@ -731,7 +734,7 @@ static void test_cipher_nego(void *z)
 		"ciphers=AESGCM",
 		"host=server1.com",
 		NULL), "OK");
-	str_check(run_case(client, server), "TLSv1.2/ECDHE-ECDSA-AES256-GCM-SHA384/ECDH=secp384r1");
+	str_check(run_case(client, server), "TLSv1.2/ECDHE-ECDSA-AES256-GCM-SHA384/ECDH=sect571r1"); // secp384r1
 
 	/* server key is RSA - ECDHE-RSA */
 	str_check(create_worker(&server, true, "show=ciphers", SERVER2, NULL), "OK");
@@ -739,7 +742,7 @@ static void test_cipher_nego(void *z)
 		"ciphers=AESGCM",
 		"host=server2.com",
 		NULL), "OK");
-	str_check(run_case(client, server), "TLSv1.2/ECDHE-RSA-AES256-GCM-SHA384/ECDH=prime256v1");
+	str_check(run_case(client, server), "TLSv1.2/ECDHE-RSA-AES256-GCM-SHA384/ECDH=sect571r1"); // prime256v1
 
 	/* server key is RSA - DHE-RSA */
 	str_check(create_worker(&server, true, SERVER2,
@@ -777,13 +780,23 @@ static void test_cert_info(void *z)
 		  " NotBefore: 2010-01-01T08:05:00Z"
 		  " NotAfter: 2060-12-31T23:55:00Z");
 
-	/* client shows server cert */
+	/* client shows server cert - utf8 */
 	str_check(create_worker(&server, true, COMPLEX1, NULL), "OK");
 	str_check(create_worker(&client, false, CA1, "show=peer-cert", "host=complex1.com", NULL), "OK");
 	str_check(run_case(client, server),
-		  "Subject: /CN=complex1.com/C=QQ/ST=Foo/L=Loc1/O=Aorg2/OU=Unit1"
+		  "Subject: /CN=complex1.com/ST=様々な論争を引き起こしてきた。/L=Kõzzä"
 		  " Issuer: /CN=TestCA1/C=AA/ST=State1/L=City1/O=Org1"
 		  " Serial: 1113692385315072860785465640275941003895485612482"
+		  " NotBefore: 2010-01-01T08:05:00Z"
+		  " NotAfter: 2060-12-31T23:55:00Z");
+
+	/* client shows server cert - t61/bmp */
+	str_check(create_worker(&server, true, COMPLEX2, NULL), "OK");
+	str_check(create_worker(&client, false, CA2, "show=peer-cert", "host=complex2.com", NULL), "OK");
+	str_check(run_case(client, server),
+		  "Subject: /CN=complex2.com/ST=様々な論争を引き起こしてきた。/L=Kõzzä"
+		  " Issuer: /CN=TestCA2"
+		  " Serial: 344032136906054686761742495217219742691739762030"
 		  " NotBefore: 2010-01-01T08:05:00Z"
 		  " NotAfter: 2060-12-31T23:55:00Z");
 end:;
@@ -796,10 +809,9 @@ end:;
 
 static const char *do_verify(const char *hostname, const char *commonName, ...)
 {
-#ifdef USUAL_LIBSSL_FOR_TLS
 	struct tls ctx;
-	struct tls_cert_info cert;
-	struct tls_cert_alt_name names[20], *alt;
+	struct tls_cert cert;
+	struct tls_cert_general_name names[20], *alt;
 	union { struct in_addr ip4; struct in6_addr ip6; } addrbuf[20];
 	int addrpos = 0, ret;
 	va_list ap;
@@ -820,17 +832,17 @@ static const char *do_verify(const char *hostname, const char *commonName, ...)
 			break;
 		alt = &names[cert.subject_alt_name_count++];
 		if (!memcmp(aname, "dns:", 4)) {
-			alt->alt_name_type = TLS_CERT_NAME_DNS;
-			alt->alt_name = aname + 4;
+			alt->name_type = TLS_CERT_GNAME_DNS;
+			alt->name_value = aname + 4;
 		} else if (!memcmp(aname, "ip4:", 4)) {
-			alt->alt_name_type = TLS_CERT_NAME_IPv4;
-			alt->alt_name = &addrbuf[addrpos++];
-			if (inet_pton(AF_INET, aname + 4, (void*)alt->alt_name) != 1)
+			alt->name_type = TLS_CERT_GNAME_IPv4;
+			alt->name_value = &addrbuf[addrpos++];
+			if (inet_pton(AF_INET, aname + 4, (void*)alt->name_value) != 1)
 				return aname;
 		} else if (!memcmp(aname, "ip6:", 4)) {
-			alt->alt_name_type = TLS_CERT_NAME_IPv6;
-			alt->alt_name = &addrbuf[addrpos++];
-			if (inet_pton(AF_INET6, aname + 4, (void*)alt->alt_name) != 1)
+			alt->name_type = TLS_CERT_GNAME_IPv6;
+			alt->name_value = &addrbuf[addrpos++];
+			if (inet_pton(AF_INET6, aname + 4, (void*)alt->name_value) != 1)
 				return aname;
 		} else {
 			return aname;
@@ -845,7 +857,6 @@ static const char *do_verify(const char *hostname, const char *commonName, ...)
 		return "OK";
 	if (ret == -1)
 		return "FAIL";
-#endif
 	return "Unexpected code";
 }
 
@@ -886,9 +897,6 @@ end:;
 }
 
 struct testcase_t tls_tests[] = {
-#ifndef USUAL_LIBSSL_FOR_TLS
-	END_OF_TESTCASES,
-#endif
 	{ "verify", test_verify },
 	{ "noverifyname", test_noverifyname },
 	{ "noverifycert", test_noverifycert },

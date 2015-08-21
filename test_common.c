@@ -1,8 +1,7 @@
-
+#include <sys/types.h>
+#include <stddef.h>
 
 #include "test_common.h"
-
-#include <locale.h>
 
 struct testgroup_t groups[] = {
 	{ "tls/", tls_tests },

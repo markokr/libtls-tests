@@ -1,6 +1,4 @@
 
-//#include <usual/base.h>
-
 #include "tinytest.h"
 #include "tinytest_macros.h"
 
