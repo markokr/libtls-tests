@@ -3,11 +3,16 @@
 WFLAGS = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wmissing-prototypes -Wpointer-arith -Wendif-labels -Wdeclaration-after-statement -Wold-style-definition -Wstrict-prototypes -Wundef -Wformat=2 -Wuninitialized
 #WFLAGS += -Wno-pointer-sign -Wno-sign-compare
 
-COMMON_CPPFLAGS = -D_GNU_SOURCE=1 -Ilibtls -Icompat -Darc4random_buf=RAND_bytes
+ifeq ($(shell uname -s), Linux)
+EXTRA_CPPFLAGS = -Icompat
+EXTRA_LIBS = -lrt
+endif
+
+COMMON_CPPFLAGS = -D_GNU_SOURCE=1 -Ilibtls $(EXTRA_CPPFLAGS)
 
 SSL_CPPFLAGS = -I/opt/apps/libressl/include
 SSL_LDFLAGS = -L/opt/apps/libressl/lib
-SSL_LIBS = -lssl -lcrypto -lrt
+SSL_LIBS = -lssl -lcrypto $(EXTRA_LIBS)
 
 noinst_PROGRAMS = connect dotest
 noinst_LIBRARIES = libtls.a

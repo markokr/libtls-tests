@@ -467,7 +467,7 @@ static const char *done_handshake(struct Worker *w)
 
 static const char *wait_for_event(struct Worker *w, short flags)
 {
-	event_assign(&w->ev, w->evbase, w->socket, flags, worker_cb, w);
+	event_set(&w->ev, w->socket, flags, worker_cb, w);
 	tt_assert(event_add(&w->ev, NULL) == 0);
 	w->pending = 1;
 	return "OK";
