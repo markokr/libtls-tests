@@ -1,6 +1,5 @@
 dotest
 connect
 libtls
-ssl
 *.a
 *.swp
