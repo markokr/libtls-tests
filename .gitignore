@@ -3,3 +3,4 @@ connect
 libtls
 *.a
 *.swp
+*.pyc
