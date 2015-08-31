@@ -10,8 +10,8 @@ To compile, first create synlink to libtls sources:
 
 It also has standalone cert parser `xparse`.  It can be run
 on either ordinary .crt / .pem files but also `*_cert.gz`
-files from [https://scans.io/]():
+files from https://scans.io/ -
 
-- [https://scans.io/study/sonar.ssl]()
-- [https://scans.io/study/sonar.moressl]()
+- https://scans.io/study/sonar.ssl
+- https://scans.io/study/sonar.moressl
 
