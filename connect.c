@@ -9,7 +9,6 @@ int main(int argc, char *argv[])
 {
 	struct tls_config *conf;
 	struct tls *ctx;
-	struct tls_cert *cert;
 	int res;
 	const char *host;
 
@@ -42,14 +41,11 @@ int main(int argc, char *argv[])
 
 	printf("connect ok\n");
 
-	res = tls_get_peer_cert(ctx, &cert, NULL);
-	if (res < 0)
-		errx(1, "tls_get_peer_cert: %s", tls_error(ctx));
-
-	tls_close(ctx);
-	tls_free(ctx);
-	tls_config_free(conf);
-
+#if 0
+	struct tls_cert *cert;
+	//res = tls_get_peer_cert(ctx, &cert, NULL);
+	//if (res < 0)
+	//errx(1, "tls_get_peer_cert: %s", tls_error(ctx));
 	printf("  CN='%s'\n", cert->subject.common_name);
 	printf("  C='%s'\n", cert->subject.country_name);
 	printf("  ST='%s'\n", cert->subject.state_or_province_name);
@@ -59,6 +55,11 @@ int main(int argc, char *argv[])
 	printf("  OU='%s'\n", cert->subject.organizational_unit_name);
 
 	tls_cert_free(cert);
+#endif
+	tls_close(ctx);
+	tls_free(ctx);
+	tls_config_free(conf);
+
 	return 0;
 }
 

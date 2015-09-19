@@ -1,7 +1,9 @@
 
 #WFLAGS = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 WFLAGS = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wmissing-prototypes -Wpointer-arith -Wendif-labels -Wdeclaration-after-statement -Wold-style-definition -Wstrict-prototypes -Wundef -Wformat=2 -Wuninitialized
-#WFLAGS += -Wno-pointer-sign -Wno-sign-compare
+WFLAGS += -Wno-pointer-sign -Wno-sign-compare
+
+CFLAGS = -O0 -g
 
 ifeq ($(shell uname -s), Linux)
 EXTRA_CPPFLAGS = -Icompat
@@ -14,11 +16,17 @@ SSL_CPPFLAGS = -I/opt/apps/libressl/include
 SSL_LDFLAGS = -L/opt/apps/libressl/lib
 SSL_LIBS = -lssl -lcrypto $(EXTRA_LIBS)
 
-noinst_PROGRAMS = connect dotest xparse
+noinst_PROGRAMS = ocsp-connect connect # dotest xparse
 noinst_LIBRARIES = libtls.a
 
 libtls_a_SOURCES = $(wildcard libtls/*.[ch])
 libtls_a_CPPFLAGS = $(COMMON_CPPFLAGS) $(SSL_CPPFLAGS)
+
+ocsp_connect_SOURCES = ocsp-connect.c mbuf.c mbuf.h
+ocsp_connect_CPPFLAGS = $(COMMON_CPPFLAGS) -I.
+ocsp_connect_LDFLAGS = $(SSL_LDFLAGS)
+ocsp_connect_LDADD = libtls.a
+ocsp_connect_LIBS = $(SSL_LIBS) -lcurl
 
 connect_SOURCES = connect.c
 connect_CPPFLAGS = $(COMMON_CPPFLAGS)
@@ -40,4 +48,8 @@ xparse_LDADD = libtls.a
 xparse_LIBS = $(SSL_LIBS) -lz
 
 include antimake.mk
+
+.PHONY: tags
+tags:
+	ctags libtls/*.[ch] *.[ch]
 
