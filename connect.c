@@ -25,6 +25,7 @@ int main(int argc, char *argv[])
 		errx(1, "tls_config_new");
 
 	tls_config_set_protocols(conf, TLS_PROTOCOLS_ALL);
+	tls_config_set_ciphers(conf, "HIGH:+3DES:!aNULL");
 	tls_config_set_ca_file(conf, "/etc/ssl/certs/ca-certificates.crt");
 
 	ctx = tls_client();
@@ -38,6 +39,10 @@ int main(int argc, char *argv[])
 	res = tls_connect(ctx, host, "443");
 	if (res < 0)
 		errx(1, "tls_connect: %s", tls_error(ctx));
+
+	res = tls_handshake(ctx);
+	if (res < 0)
+		errx(1, "tls_handshake: %s", tls_error(ctx));
 
 	printf("connect ok\n");
 
